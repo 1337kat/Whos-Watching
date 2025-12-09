@@ -1,0 +1,88 @@
+--========================================================--
+-- 👁️ HEATMAP LOOK-AT-YOU DETECTOR (EYE EMOJI ONLY)
+-- • Shows only an eye emoji per person facing you
+-- • Heatmap color: Yellow → Orange → Red (threat)
+-- • No names, no angles
+--========================================================--
+
+local Players = game:GetService("Players")
+local RunService = game:GetService("RunService")
+local LocalPlayer = Players.LocalPlayer
+
+-- cleanup
+if getgenv().LOOK_DRAW then
+    for _, d in ipairs(getgenv().LOOK_DRAW) do d:Remove() end
+end
+getgenv().LOOK_DRAW = {}
+
+-- title
+local title = Drawing.new("Text")
+title.Text = "Eyes On You:"
+title.Size = 20
+title.Position = Vector2.new(30, 200)
+title.Color = Color3.new(1,1,1)
+title.Visible = true
+table.insert(getgenv().LOOK_DRAW, title)
+
+-- angle calculation
+local function getAngle(fromCF, toPos)
+    local look = fromCF.LookVector
+    local dir = (toPos - fromCF.Position).Unit
+    local dot = math.clamp(look:Dot(dir), -1, 1)
+    return math.deg(math.acos(dot))
+end
+
+-- heatmap color based on angle
+local function heatColor(angle)
+    local t = math.clamp(1 - (angle / 45), 0, 1)  -- 0–1 intensity
+
+    -- Yellow → Orange → Red
+    local r = 1
+    local g = 1 - t
+    local b = 0
+
+    return Color3.new(r, g, b)
+end
+
+task.spawn(function()
+    while true do
+        task.wait()
+
+        -- clear all except title
+        for i = #getgenv().LOOK_DRAW, 2, -1 do
+            getgenv().LOOK_DRAW[i]:Remove()
+            table.remove(getgenv().LOOK_DRAW, i)
+        end
+
+        local char = LocalPlayer.Character
+        if not char then continue end
+        local hrp = char:FindFirstChild("HumanoidRootPart")
+        if not hrp then continue end
+
+        local myPos = hrp.Position
+        local y = 230
+
+        for _, plr in ipairs(Players:GetPlayers()) do
+            if plr ~= LocalPlayer and plr.Character then
+                local root = plr.Character:FindFirstChild("HumanoidRootPart")
+
+                if root then
+                    local angle = getAngle(root.CFrame, myPos)
+
+                    if angle <= 45 then
+                        local eye = Drawing.new("Text")
+                        eye.Text = "👁️"   -- ONLY eye emoji
+                        eye.Size = 20
+
+                        eye.Position = Vector2.new(30, y)
+                        eye.Color = heatColor(angle)
+                        eye.Visible = true
+
+                        table.insert(getgenv().LOOK_DRAW, eye)
+                        y += 25
+                    end
+                end
+            end
+        end
+    end
+end)
