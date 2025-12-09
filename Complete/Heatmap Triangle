@@ -1,11 +1,9 @@
 --========================================================--
---   🛡️ AAA THREAT AWARENESS SYSTEM (FULL VERSION)
---   • Anonymous Target IDs (#1, #2, #3...)
---   • Angle + Distance + Persistence threat modeling
---   • Heatmap scoring (Yellow → Orange → Red)
---   • Sorted Threat Monitor UI
---   • Minimalistic Triangle Indicators Above Stalkers
---   • One complete script, fully re-exec safe
+--   AAA THREAT AWARENESS SYSTEM (CLEAN VERSION)
+--   • No emojis
+--   • No ID numbers
+--   • Heatmap scoring (Yellow → Red)
+--   • Fully re-exec safe
 --========================================================--
 
 local Players      = game:GetService("Players")
@@ -16,10 +14,10 @@ local Workspace    = game:GetService("Workspace")
 --========================================================--
 --  CONFIG
 --========================================================--
-local FOV_ANGLE      = 45      -- max angle to count as "facing you"
-local MAX_DIST       = 120     -- distance at which threat ~ 0
-local PERSIST_TIME   = 2.5     -- seconds to reach full persistence
-local THREAT_MIN     = 0.03    -- minimum threat to show
+local FOV_ANGLE      = 45
+local MAX_DIST       = 120
+local PERSIST_TIME   = 2.5
+local THREAT_MIN     = 0.03
 
 local ANGLE_WEIGHT   = 0.5
 local DIST_WEIGHT    = 0.2
@@ -38,12 +36,8 @@ if getgenv().A_TRI then
 end
 getgenv().A_TRI = {}
 
-if getgenv().A_CONN then
-    getgenv().A_CONN:Disconnect()
-end
-if getgenv().A_TRI_CONN then
-    getgenv().A_TRI_CONN:Disconnect()
-end
+if getgenv().A_CONN then getgenv().A_CONN:Disconnect() end
+if getgenv().A_TRI_CONN then getgenv().A_TRI_CONN:Disconnect() end
 
 --========================================================--
 --  TITLE
@@ -87,16 +81,15 @@ local function threatLabel(t)
 end
 
 --========================================================--
---  STALKER STATE TABLE
+--  STALKER TABLE (NO ID FIELD ANYMORE)
 --========================================================--
 local watchers = {}
-local nextId = 1
 
 --========================================================--
---  MAIN THREAT LOGIC LOOP
+--  MAIN THREAT LOOP
 --========================================================--
 getgenv().A_CONN = RunService.Heartbeat:Connect(function(dt)
-    -- Clear old UI (except title)
+    -- clear UI below title
     for i = #getgenv().A_DRAW, 2, -1 do
         getgenv().A_DRAW[i]:Remove()
         table.remove(getgenv().A_DRAW, i)
@@ -104,6 +97,7 @@ getgenv().A_CONN = RunService.Heartbeat:Connect(function(dt)
 
     local char = LocalPlayer.Character
     if not char then return end
+
     local head = char:FindFirstChild("Head")
     local root = char:FindFirstChild("HumanoidRootPart")
     local myPos = head and head.Position or (root and root.Position)
@@ -111,7 +105,6 @@ getgenv().A_CONN = RunService.Heartbeat:Connect(function(dt)
 
     local now = os.clock()
 
-    -- Track players
     for _, plr in ipairs(Players:GetPlayers()) do
         if plr ~= LocalPlayer and plr.Character then
             local h = plr.Character:FindFirstChild("Head")
@@ -121,12 +114,10 @@ getgenv().A_CONN = RunService.Heartbeat:Connect(function(dt)
             if ref then
                 if not watchers[plr] then
                     watchers[plr] = {
-                        id = nextId,
                         lookTime = 0,
                         lastSeen = now,
                         threat = 0
                     }
-                    nextId = nextId + 1
                 end
 
                 local info = watchers[plr]
@@ -143,28 +134,29 @@ getgenv().A_CONN = RunService.Heartbeat:Connect(function(dt)
                     local distScore = 1 - math.clamp(dist / MAX_DIST, 0, 1)
                     local persistScore = math.clamp(info.lookTime / PERSIST_TIME, 0, 1)
 
-                    local threat =
+                    info.threat =
                         angleScore * ANGLE_WEIGHT +
                         distScore * DIST_WEIGHT +
                         persistScore * PERSIST_WEIGHT
 
-                    info.threat = math.clamp(threat, 0, 1)
+                    info.threat = math.clamp(info.threat, 0, 1)
+
                 else
                     info.lookTime = math.max(0, info.lookTime - dt * 0.5)
-                    info.threat = math.max(0, info.threat - dt * 0.3)
+                    info.threat  = math.max(0, info.threat - dt * 0.3)
                 end
             end
         end
     end
 
-    -- Prune dead/irrelevant watchers
+    -- prune dead watchers
     for plr, info in pairs(watchers) do
         if not plr.Character or (now - info.lastSeen > 8 and info.threat <= THREAT_MIN) then
             watchers[plr] = nil
         end
     end
 
-    -- Build active threat list
+    -- collect and sort threats
     local active = {}
     for _, info in pairs(watchers) do
         if info.threat >= THREAT_MIN then
@@ -176,12 +168,12 @@ getgenv().A_CONN = RunService.Heartbeat:Connect(function(dt)
         return a.threat > b.threat
     end)
 
-    -- Draw Threat Monitor
+    -- draw threat list
     local y = 230
     for _, info in ipairs(active) do
         local t = info.threat
-        local col = heatColor(t)
         local lbl = threatLabel(t)
+        local col = heatColor(t)
 
         local txt = Drawing.new("Text")
         txt.Size = 18
@@ -191,16 +183,18 @@ getgenv().A_CONN = RunService.Heartbeat:Connect(function(dt)
         txt.OutlineColor = Color3.new(0,0,0)
         txt.Visible = true
 
-        txt.Text = string.format("#%d — %d%% [%s]", info.id, t * 100, lbl)
+        -- CLEAN VERSION (NO ID)
+        txt.Text = string.format("%d%% [%s]", t * 100, lbl)
+
         table.insert(getgenv().A_DRAW, txt)
         y += 20
     end
 
+    -- title update (NO ID)
     if #active > 0 then
         local top = active[1]
-        title.Text = string.format("Threat Monitor: %d active (Top #%d: %d%% %s)",
+        title.Text = string.format("Threat Monitor: %d active (Top: %d%% %s)",
             #active,
-            top.id,
             top.threat * 100,
             threatLabel(top.threat)
         )
@@ -212,11 +206,10 @@ getgenv().A_CONN = RunService.Heartbeat:Connect(function(dt)
 end)
 
 --========================================================--
---  TRIANGLE INDICATORS ABOVE STALKERS
+--  TRIANGLE INDICATORS
 --========================================================--
 local cam = Workspace.CurrentCamera
 
--- Create triangle drawing
 local function triangleLines()
     local a = Drawing.new("Line")
     local b = Drawing.new("Line")
@@ -237,7 +230,6 @@ local function triangleLines()
     return a, b, c
 end
 
--- Render triangles every frame
 getgenv().A_TRI_CONN = RunService.RenderStepped:Connect(function()
     for _, d in ipairs(getgenv().A_TRI) do d:Remove() end
     table.clear(getgenv().A_TRI)
