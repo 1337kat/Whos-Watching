@@ -1,0 +1,215 @@
+task.spawn(function()
+
+--========================================================--
+--  HOLY GRAIL WATCHER ARROW — FORTNITE STYLE + CIRCLE HUD
+--========================================================--
+
+local Players    = game:GetService("Players")
+local Workspace  = game:GetService("Workspace")
+local RunService = game:GetService("RunService")
+
+local LocalPlayer = Players.LocalPlayer
+
+------------------------------------------------------------
+-- CONFIG — same logic, but smaller arrow
+------------------------------------------------------------
+local FOV_ANGLE = 40
+local MAX_DIST  = 120
+
+local ARROW_LENGTH = 16   -- ↓ smaller
+local ARROW_BASE   = 10   -- ↓ smaller
+local ARROW_WIDTH  =  8   -- ↓ smaller
+local CIRCLE_SCALE = 0.22 -- 22% of screen size (medium ring)
+
+------------------------------------------------------------
+-- CLEANUP / RE-EXEC SAFE
+------------------------------------------------------------
+if getgenv().WATCHER_DRAW then
+    for _, d in ipairs(getgenv().WATCHER_DRAW) do pcall(function() d:Remove() end) end
+end
+getgenv().WATCHER_DRAW = {}
+
+if getgenv().WATCHER_CONN then
+    getgenv().WATCHER_CONN:Disconnect()
+    getgenv().WATCHER_CONN = nil
+end
+
+------------------------------------------------------------
+-- LOGIC HELPERS (same as original)
+------------------------------------------------------------
+local function angleBetween(cf, targetPos)
+    local look = cf.LookVector
+    local dir = targetPos - cf.Position
+    local m = dir.Magnitude
+    if m < 1e-6 then return 180 end
+    dir = dir / m
+    local dot = math.clamp(look:Dot(dir), -1, 1)
+    return math.deg(math.acos(dot))
+end
+
+local function computeConfidence(angle, dist)
+    local a = 1 - math.clamp(angle / FOV_ANGLE, 0, 1)
+    local d = 1 - math.clamp(dist / MAX_DIST, 0, 1)
+    return math.clamp(a * 0.7 + d * 0.3, 0, 1)
+end
+
+local function lerp(a,b,t) return a + (b-a)*t end
+
+------------------------------------------------------------
+-- CREATE SINGLE ARROW (3 lines)
+------------------------------------------------------------
+local ArrowMain = Drawing.new("Line")
+local ArrowL    = Drawing.new("Line")
+local ArrowR    = Drawing.new("Line")
+
+for _, L in ipairs({ArrowMain, ArrowL, ArrowR}) do
+    L.Visible = false
+    L.Thickness = 2
+    table.insert(getgenv().WATCHER_DRAW, L)
+end
+
+local function hideArrow()
+    ArrowMain.Visible = false
+    ArrowL.Visible    = false
+    ArrowR.Visible    = false
+end
+
+------------------------------------------------------------
+-- POSITION + DRAW ARROW (Fortnite style)
+------------------------------------------------------------
+local function drawArrow(center, angle, radius, color, alpha)
+
+    -- Convert angle on circle → screen direction
+    local dir = Vector2.new(math.cos(angle), math.sin(angle))
+
+    -- tip of arrow on circular HUD
+    local tip = center + dir * radius
+
+    -- base center (behind tip)
+    local baseCenter = tip - dir * ARROW_LENGTH
+
+    -- perpendicular vector for arrow width
+    local perp = Vector2.new(-dir.Y, dir.X)
+
+    local leftBase  = baseCenter + perp * (ARROW_WIDTH * 0.5)
+    local rightBase = baseCenter - perp * (ARROW_WIDTH * 0.5)
+
+    -- apply color + alpha
+    ArrowMain.Color = color
+    ArrowL.Color    = color
+    ArrowR.Color    = color
+
+    ArrowMain.Transparency = 1 - alpha
+    ArrowL.Transparency    = 1 - alpha
+    ArrowR.Transparency    = 1 - alpha
+
+    -- shaft
+    ArrowMain.From = baseCenter
+    ArrowMain.To   = tip
+
+    -- left cheek
+    ArrowL.From = leftBase
+    ArrowL.To   = tip
+
+    -- right cheek
+    ArrowR.From = rightBase
+    ArrowR.To   = tip
+
+    ArrowMain.Visible = true
+    ArrowL.Visible    = true
+    ArrowR.Visible    = true
+end
+
+------------------------------------------------------------
+-- MAIN LOOP
+------------------------------------------------------------
+getgenv().WATCHER_CONN = RunService.RenderStepped:Connect(function()
+
+    local cam = Workspace.CurrentCamera
+    if not cam then hideArrow() return end
+
+    local char = LocalPlayer.Character
+    if not char then hideArrow() return end
+
+    local head = char:FindFirstChild("Head")
+    if not head then hideArrow() return end
+
+    local myPos = head.Position
+
+    ------------------------------------------------------------------
+    -- FIND BEST WATCHER (highest confidence)
+    ------------------------------------------------------------------
+    local bestConf = nil
+    local bestPos  = nil
+
+    for _, plr in ipairs(Players:GetPlayers()) do
+        if plr ~= LocalPlayer and plr.Character then
+            local h = plr.Character:FindFirstChild("Head")
+            if h then
+                local ang = angleBetween(h.CFrame, myPos)
+                if ang <= FOV_ANGLE then
+                    local dist = (h.Position - myPos).Magnitude
+                    local conf = computeConfidence(ang, dist)
+
+                    if not bestConf or conf > bestConf then
+                        bestConf = conf
+                        bestPos  = h.Position
+                    end
+                end
+            end
+        end
+    end
+
+    if not bestPos then hideArrow() return end
+
+    ------------------------------------------------------------------
+    -- If camera already sees the target → hide arrow
+    ------------------------------------------------------------------
+    local vp = cam:WorldToViewportPoint(bestPos)
+    local scr = cam.ViewportSize
+    local pos2 = Vector2.new(vp.X, vp.Y)
+
+    local onScreen =
+        vp.Z > 0 and
+        pos2.X >= 0 and pos2.X <= scr.X and
+        pos2.Y >= 0 and pos2.Y <= scr.Y
+
+    if onScreen then
+        hideArrow()
+        return
+    end
+
+    ------------------------------------------------------------------
+    -- PROJECT TO CIRCLE HUD (no corners, no edges)
+    ------------------------------------------------------------------
+    local cx, cy = scr.X/2, scr.Y/2
+    local center = Vector2.new(cx, cy)
+
+    -- if behind camera → mirror
+    if vp.Z < 0 then
+        pos2 = center - (pos2 - center)
+    end
+
+    local dir = (pos2 - center)
+    if dir.Magnitude < 1 then dir = Vector2.new(0,-1) else dir = dir.Unit end
+
+    -- Convert 2D dir → angle on circle HUD
+    local angle = math.atan2(dir.Y, dir.X)
+
+    -- Use a medium ring around screen center
+    local R = math.min(scr.X, scr.Y) * CIRCLE_SCALE
+
+    ------------------------------------------------------------------
+    -- COLOR + ALPHA (same logic as original)
+    ------------------------------------------------------------------
+    local t = bestConf
+    local col = Color3.new(1, lerp(1, 0.3, t), 0)
+    local alpha = 0.35 + t * 0.35
+
+    ------------------------------------------------------------------
+    -- DRAW FINAL FORTNITE-STYLE ARROW
+    ------------------------------------------------------------------
+    drawArrow(center, angle, R, col, alpha)
+end)
+
+end)
