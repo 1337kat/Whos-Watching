@@ -1,0 +1,278 @@
+--========================================================--
+--   🛡️ AAA THREAT AWARENESS SYSTEM (FULL VERSION)
+--   • Anonymous Target IDs (#1, #2, #3...)
+--   • Angle + Distance + Persistence threat modeling
+--   • Heatmap scoring (Yellow → Orange → Red)
+--   • Sorted Threat Monitor UI
+--   • Minimalistic Triangle Indicators Above Stalkers
+--   • One complete script, fully re-exec safe
+--========================================================--
+
+local Players      = game:GetService("Players")
+local RunService   = game:GetService("RunService")
+local LocalPlayer  = Players.LocalPlayer
+local Workspace    = game:GetService("Workspace")
+
+--========================================================--
+--  CONFIG
+--========================================================--
+local FOV_ANGLE      = 45      -- max angle to count as "facing you"
+local MAX_DIST       = 120     -- distance at which threat ~ 0
+local PERSIST_TIME   = 2.5     -- seconds to reach full persistence
+local THREAT_MIN     = 0.03    -- minimum threat to show
+
+local ANGLE_WEIGHT   = 0.5
+local DIST_WEIGHT    = 0.2
+local PERSIST_WEIGHT = 0.3
+
+--========================================================--
+--  CLEANUP (FULL)
+--========================================================--
+if getgenv().A_DRAW then
+    for _, d in ipairs(getgenv().A_DRAW) do d:Remove() end
+end
+getgenv().A_DRAW = {}
+
+if getgenv().A_TRI then
+    for _, d in ipairs(getgenv().A_TRI) do d:Remove() end
+end
+getgenv().A_TRI = {}
+
+if getgenv().A_CONN then
+    getgenv().A_CONN:Disconnect()
+end
+if getgenv().A_TRI_CONN then
+    getgenv().A_TRI_CONN:Disconnect()
+end
+
+--========================================================--
+--  TITLE
+--========================================================--
+local title = Drawing.new("Text")
+title.Text = "Threat Monitor:"
+title.Size = 20
+title.Position = Vector2.new(30, 200)
+title.Color = Color3.new(1,1,1)
+title.Outline = true
+title.OutlineColor = Color3.new(0,0,0)
+title.Visible = true
+table.insert(getgenv().A_DRAW, title)
+
+--========================================================--
+--  UTILITIES
+--========================================================--
+local function angleTo(fromCF, toPos)
+    local look = fromCF.LookVector
+    local dir = (toPos - fromCF.Position)
+    local m = dir.Magnitude
+    if m < 1e-6 then return 180 end
+    dir = dir / m
+    local dot = math.clamp(look:Dot(dir), -1, 1)
+    return math.deg(math.acos(dot))
+end
+
+local function heatColor(t)
+    t = math.clamp(t, 0, 1)
+    return Color3.new(1, 1 - t, 0) -- Yellow → Red
+end
+
+local function threatLabel(t)
+    if t >= 0.75 then
+        return "HIGH"
+    elseif t >= 0.4 then
+        return "MED"
+    else
+        return "LOW"
+    end
+end
+
+--========================================================--
+--  STALKER STATE TABLE
+--========================================================--
+local watchers = {}
+local nextId = 1
+
+--========================================================--
+--  MAIN THREAT LOGIC LOOP
+--========================================================--
+getgenv().A_CONN = RunService.Heartbeat:Connect(function(dt)
+    -- Clear old UI (except title)
+    for i = #getgenv().A_DRAW, 2, -1 do
+        getgenv().A_DRAW[i]:Remove()
+        table.remove(getgenv().A_DRAW, i)
+    end
+
+    local char = LocalPlayer.Character
+    if not char then return end
+    local head = char:FindFirstChild("Head")
+    local root = char:FindFirstChild("HumanoidRootPart")
+    local myPos = head and head.Position or (root and root.Position)
+    if not myPos then return end
+
+    local now = os.clock()
+
+    -- Track players
+    for _, plr in ipairs(Players:GetPlayers()) do
+        if plr ~= LocalPlayer and plr.Character then
+            local h = plr.Character:FindFirstChild("Head")
+            local r = plr.Character:FindFirstChild("HumanoidRootPart")
+            local ref = h or r
+
+            if ref then
+                if not watchers[plr] then
+                    watchers[plr] = {
+                        id = nextId,
+                        lookTime = 0,
+                        lastSeen = now,
+                        threat = 0
+                    }
+                    nextId = nextId + 1
+                end
+
+                local info = watchers[plr]
+                local angle = angleTo(ref.CFrame, myPos)
+                local dist = (ref.Position - myPos).Magnitude
+
+                local isFacing = angle <= FOV_ANGLE
+
+                if isFacing then
+                    info.lookTime += dt
+                    info.lastSeen = now
+
+                    local angleScore = 1 - math.clamp(angle / FOV_ANGLE, 0, 1)
+                    local distScore = 1 - math.clamp(dist / MAX_DIST, 0, 1)
+                    local persistScore = math.clamp(info.lookTime / PERSIST_TIME, 0, 1)
+
+                    local threat =
+                        angleScore * ANGLE_WEIGHT +
+                        distScore * DIST_WEIGHT +
+                        persistScore * PERSIST_WEIGHT
+
+                    info.threat = math.clamp(threat, 0, 1)
+                else
+                    info.lookTime = math.max(0, info.lookTime - dt * 0.5)
+                    info.threat = math.max(0, info.threat - dt * 0.3)
+                end
+            end
+        end
+    end
+
+    -- Prune dead/irrelevant watchers
+    for plr, info in pairs(watchers) do
+        if not plr.Character or (now - info.lastSeen > 8 and info.threat <= THREAT_MIN) then
+            watchers[plr] = nil
+        end
+    end
+
+    -- Build active threat list
+    local active = {}
+    for _, info in pairs(watchers) do
+        if info.threat >= THREAT_MIN then
+            table.insert(active, info)
+        end
+    end
+
+    table.sort(active, function(a, b)
+        return a.threat > b.threat
+    end)
+
+    -- Draw Threat Monitor
+    local y = 230
+    for _, info in ipairs(active) do
+        local t = info.threat
+        local col = heatColor(t)
+        local lbl = threatLabel(t)
+
+        local txt = Drawing.new("Text")
+        txt.Size = 18
+        txt.Position = Vector2.new(30, y)
+        txt.Color = col
+        txt.Outline = true
+        txt.OutlineColor = Color3.new(0,0,0)
+        txt.Visible = true
+
+        txt.Text = string.format("#%d — %d%% [%s]", info.id, t * 100, lbl)
+        table.insert(getgenv().A_DRAW, txt)
+        y += 20
+    end
+
+    if #active > 0 then
+        local top = active[1]
+        title.Text = string.format("Threat Monitor: %d active (Top #%d: %d%% %s)",
+            #active,
+            top.id,
+            top.threat * 100,
+            threatLabel(top.threat)
+        )
+        title.Color = heatColor(top.threat)
+    else
+        title.Text = "Threat Monitor: 0 active"
+        title.Color = Color3.new(1,1,1)
+    end
+end)
+
+--========================================================--
+--  TRIANGLE INDICATORS ABOVE STALKERS
+--========================================================--
+local cam = Workspace.CurrentCamera
+
+-- Create triangle drawing
+local function triangleLines()
+    local a = Drawing.new("Line")
+    local b = Drawing.new("Line")
+    local c = Drawing.new("Line")
+
+    a.Thickness = 2
+    b.Thickness = 2
+    c.Thickness = 2
+
+    a.Visible = true
+    b.Visible = true
+    c.Visible = true
+
+    table.insert(getgenv().A_TRI, a)
+    table.insert(getgenv().A_TRI, b)
+    table.insert(getgenv().A_TRI, c)
+
+    return a, b, c
+end
+
+-- Render triangles every frame
+getgenv().A_TRI_CONN = RunService.RenderStepped:Connect(function()
+    for _, d in ipairs(getgenv().A_TRI) do d:Remove() end
+    table.clear(getgenv().A_TRI)
+
+    for plr, info in pairs(watchers) do
+        local t = info.threat
+        if t <= THREAT_MIN then continue end
+
+        if plr.Character then
+            local head = plr.Character:FindFirstChild("Head")
+            if head then
+                local pos, vis = cam:WorldToViewportPoint(head.Position + Vector3.new(0, 2.5, 0))
+                if vis then
+                    local size = 6 + (t * 4)
+                    local top = Vector2.new(pos.X, pos.Y - size)
+                    local left = Vector2.new(pos.X - size * 0.75, pos.Y + size * 0.6)
+                    local right = Vector2.new(pos.X + size * 0.75, pos.Y + size * 0.6)
+
+                    local col = heatColor(t)
+
+                    local A, B, C = triangleLines()
+
+                    A.From = left
+                    A.To   = top
+                    A.Color = col
+
+                    B.From = top
+                    B.To   = right
+                    B.Color = col
+
+                    C.From = right
+                    C.To   = left
+                    C.Color = col
+                end
+            end
+        end
+    end
+end)
